@@ -22,9 +22,7 @@ st.warning(
 )
 
 # ================== 模型路径 ==================
-MODEL_PATH = os.path.expanduser(
-    "~/Desktop/PE_Risk_Prediction/model/rf_model.pkl"
-)
+MODEL_PATH = "model/rf_model.pkl"
 
 # ================== 加载模型 ==================
 if not os.path.exists(MODEL_PATH):
