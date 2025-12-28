@@ -19,7 +19,8 @@ def load_model(path):
 rf_model = load_model(RF_MODEL_PATH)
 log_model = load_model(LOG_MODEL_PATH)
 
-# 获取 Logistic 模型实际特征
+# 获取模型训练特征
+rf_feature_cols = rf_model.feature_names_in_
 log_feature_cols = log_model.feature_names_in_
 
 # ================== 页面标题 ==================
@@ -49,10 +50,13 @@ def get_risk_level(prob):
     else:
         return "高风险"
 
+# ================== 获取当前模型特征列 ==================
+def get_model_feature_cols():
+    return rf_feature_cols if model_choice == "随机森林（RF）" else log_feature_cols
+
 # ================== 单条输入预测 ==================
 if mode == "单条输入预测":
     st.sidebar.header("🔧 输入临床指标")
-    # 用户输入核心指标
     WBC = st.sidebar.number_input("WBC", 0.0)
     N = st.sidebar.number_input("中性粒细胞 N", 0.0)
     L = st.sidebar.number_input("淋巴细胞 L", 0.0)
@@ -89,7 +93,7 @@ if mode == "单条输入预测":
         st.write(f"HSI = {HSI:.3f}")
         st.write(f"SUA/sCr = {SUA_sCr:.3f}")
 
-    # 构造完整特征字典
+    # 构造输入字典
     input_dict = {
         "WBC": WBC, "N": N, "Plt": Plt, "L": L, "M": M,
         "LMR": LMR, "NMR": NMR, "SII": SII, "PIV": PIV,
@@ -97,11 +101,11 @@ if mode == "单条输入预测":
         "APRI": APRI, "FIB4": FIB4, "HSI": HSI, "SUA/sCr": SUA_sCr,
         "BMI": BMI, "孕前BMI": BMI, "试管": IVF, "慢性高血压": chronic_htn,
         "糖尿病": dm, "子痫前期既往史": pe_history, "妊娠年龄": age
-        # 其余特征可暂填0
+        # 其余特征填 0
     }
 
-    # 构造预测数组，缺失列填 0
-    features = np.array([input_dict.get(feat, 0) for feat in log_feature_cols]).reshape(1, -1)
+    feature_cols = get_model_feature_cols()
+    features = np.array([input_dict.get(feat, 0) for feat in feature_cols]).reshape(1, -1)
 
     if st.button("🚀 开始预测"):
         try:
@@ -129,16 +133,19 @@ else:
         df["HSI"] = (8 * df["ALT"] / df["AST"] + df["孕前 BMI"]).replace(np.inf, 0).fillna(0)
         df["SUA_sCr"] = (df["UA"] / df["Cr"]).replace(np.inf, 0).fillna(0)
 
+        # 获取当前模型特征
+        feature_cols = get_model_feature_cols()
+
         # 检测缺失列
-        missing_cols = [col for col in log_feature_cols if col not in df.columns]
+        missing_cols = [col for col in feature_cols if col not in df.columns]
         if missing_cols:
             st.warning("⚠️ 以下特征列缺失，将使用 0 填充：")
             for col in missing_cols:
                 st.write("-", col)
                 df[col] = 0
 
-        # 按模型训练列顺序构造特征矩阵
-        X = df[log_feature_cols].values
+        # 构造特征矩阵
+        X = df[feature_cols].values
 
         try:
             if model_choice == "随机森林（RF）":
