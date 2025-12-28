@@ -19,6 +19,9 @@ def load_model(path):
 rf_model = load_model(RF_MODEL_PATH)
 log_model = load_model(LOG_MODEL_PATH)
 
+# 获取 Logistic 模型实际特征
+log_feature_cols = log_model.feature_names_in_
+
 # ================== 页面标题 ==================
 st.title("🟣 子痫前期风险预测工具")
 st.markdown("⚠️ **科研与教学用途，不用于临床诊断**")
@@ -49,6 +52,7 @@ def get_risk_level(prob):
 # ================== 单条输入预测 ==================
 if mode == "单条输入预测":
     st.sidebar.header("🔧 输入临床指标")
+    # 用户输入核心指标
     WBC = st.sidebar.number_input("WBC", 0.0)
     N = st.sidebar.number_input("中性粒细胞 N", 0.0)
     L = st.sidebar.number_input("淋巴细胞 L", 0.0)
@@ -65,7 +69,7 @@ if mode == "单条输入预测":
     dm = st.sidebar.selectbox("糖尿病", [0, 1])
     pe_history = st.sidebar.selectbox("子痫前期既往史", [0, 1])
 
-    # 自动计算指标
+    # 自动计算衍生指标
     LMR = L / M if M > 0 else 0
     NMR = N / M if M > 0 else 0
     SII = (N * Plt / L) if L > 0 else 0
@@ -74,14 +78,6 @@ if mode == "单条输入预测":
     FIB4 = (age * AST / (Plt * math.sqrt(ALT))) if (Plt > 0 and ALT > 0) else 0
     HSI = (8 * ALT / AST + BMI) if AST > 0 else 0
     SUA_sCr = UA / Cr if Cr > 0 else 0
-
-    features = np.array([[
-        WBC, N, Plt, L, M,
-        LMR, NMR, SII, PIV,
-        AST, ALT, UA, Cr,
-        APRI, FIB4, HSI, SUA_sCr,
-        BMI, IVF, chronic_htn, dm, pe_history, age
-    ]])
 
     with st.expander("📐 系统自动计算指标"):
         st.write(f"LMR = {LMR:.3f}")
@@ -93,13 +89,26 @@ if mode == "单条输入预测":
         st.write(f"HSI = {HSI:.3f}")
         st.write(f"SUA/sCr = {SUA_sCr:.3f}")
 
+    # 构造完整特征字典
+    input_dict = {
+        "WBC": WBC, "N": N, "Plt": Plt, "L": L, "M": M,
+        "LMR": LMR, "NMR": NMR, "SII": SII, "PIV": PIV,
+        "AST": AST, "ALT": ALT, "UA": UA, "Cr": Cr,
+        "APRI": APRI, "FIB4": FIB4, "HSI": HSI, "SUA/sCr": SUA_sCr,
+        "BMI": BMI, "孕前BMI": BMI, "试管": IVF, "慢性高血压": chronic_htn,
+        "糖尿病": dm, "子痫前期既往史": pe_history, "妊娠年龄": age
+        # 其余特征可暂填0
+    }
+
+    # 构造预测数组，缺失列填 0
+    features = np.array([input_dict.get(feat, 0) for feat in log_feature_cols]).reshape(1, -1)
+
     if st.button("🚀 开始预测"):
-        features_safe = np.array(features).reshape(1, -1)
         try:
             if model_choice == "随机森林（RF）":
-                prob = rf_model.predict_proba(features_safe)[0, 1]
+                prob = rf_model.predict_proba(features)[0, 1]
             else:
-                prob = log_model.predict_proba(features_safe)[0, 1]
+                prob = log_model.predict_proba(features)[0, 1]
             st.success(f"预测风险概率：{prob*100:.1f}% ({get_risk_level(prob)})")
         except ValueError as e:
             st.error(f"❌ 预测失败: {e}")
@@ -110,7 +119,7 @@ else:
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
 
-        # 自动计算指标
+        # 自动计算衍生指标
         df["LMR"] = df["L"] / df["M"].replace(0, np.nan)
         df["NMR"] = df["N"] / df["M"].replace(0, np.nan)
         df["SII"] = (df["N"] * df["Plt"] / df["L"]).replace(np.inf, 0).fillna(0)
@@ -120,16 +129,16 @@ else:
         df["HSI"] = (8 * df["ALT"] / df["AST"] + df["孕前 BMI"]).replace(np.inf, 0).fillna(0)
         df["SUA_sCr"] = (df["UA"] / df["Cr"]).replace(np.inf, 0).fillna(0)
 
-        # 特征顺序（必须和模型一致）
-        feature_cols = [
-            "WBC","N","Plt","L","M",
-            "LMR","NMR","SII","PIV",
-            "AST","ALT","UA","Cr",
-            "APRI","FIB4","HSI","SUA_sCr",
-            "孕前 BMI","试管","慢性高血压","糖尿病","子痫前期既往史","妊娠年龄"
-        ]
+        # 检测缺失列
+        missing_cols = [col for col in log_feature_cols if col not in df.columns]
+        if missing_cols:
+            st.warning("⚠️ 以下特征列缺失，将使用 0 填充：")
+            for col in missing_cols:
+                st.write("-", col)
+                df[col] = 0
 
-        X = df[feature_cols].values
+        # 按模型训练列顺序构造特征矩阵
+        X = df[log_feature_cols].values
 
         try:
             if model_choice == "随机森林（RF）":
