@@ -2,121 +2,104 @@ import streamlit as st
 import pickle
 import numpy as np
 import os
-import math
+import pandas as pd
 
-# ===============================
-# 模型路径
-# ===============================
-MODEL_PATH = "model/rf_model.pkl"
+# ================== 模型路径 ==================
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RF_MODEL_PATH = os.path.join(BASE_DIR, "model", "rf_model.pkl")
+LOG_MODEL_PATH = os.path.join(BASE_DIR, "model", "logistic_model.pkl")
 
-if not os.path.exists(MODEL_PATH):
-    st.error(f"❌ 模型文件未找到：{MODEL_PATH}")
+# ================== 加载模型 ==================
+@st.cache_resource
+def load_model(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+if not os.path.exists(RF_MODEL_PATH) or not os.path.exists(LOG_MODEL_PATH):
+    st.error("❌ 模型文件未找到，请先在本地训练 RF 和 Logistic")
     st.stop()
 
-with open(MODEL_PATH, "rb") as f:
-    model = pickle.load(f)
+rf_model = load_model(RF_MODEL_PATH)
+log_model = load_model(LOG_MODEL_PATH)
 
-# ===============================
-# 免责声明
-# ===============================
-st.markdown(
-    """
-    <div style="background-color:#FFF8DC;padding:15px;border-radius:8px;">
-    ⚠️ <b>免责声明</b><br>
-    本工具仅用于科研与教学演示目的，预测结果不构成临床诊断或治疗建议。
-    请勿用于真实临床决策。
-    </div>
-    """,
-    unsafe_allow_html=True
+# ================== 页面标题 ==================
+st.title("🟣 子痫前期风险预测工具")
+st.markdown("⚠️ **科研与教学用途，不用于临床诊断**")
+
+# ================== 模型选择 ==================
+model_choice = st.radio(
+    "请选择预测模型：",
+    ["随机森林（RF）", "Logistic 回归"],
+    horizontal=True
 )
 
-st.title("🟣 子痫前期风险预测工具（Random Forest）")
-st.markdown("请输入**基础原始指标**，系统将自动计算所有复合炎症/代谢指标。")
+# ================== 输入区 ==================
+st.sidebar.header("🔧 输入临床指标")
 
-# ===============================
-# 输入
-# ===============================
-st.sidebar.header("🔧 基础指标输入")
+WBC = st.sidebar.number_input("WBC", 0.0)
+N = st.sidebar.number_input("中性粒细胞 N", 0.0)
+L = st.sidebar.number_input("淋巴细胞 L", 0.0)
+Plt = st.sidebar.number_input("血小板 Plt", 0.0)
 
-# —— 血液指标 ——
-WBC = st.sidebar.number_input("WBC", value=0.0)
-N   = st.sidebar.number_input("N（中性粒细胞）", value=0.0)
-L   = st.sidebar.number_input("L（淋巴细胞）", value=0.0)
-M   = st.sidebar.number_input("M（单核细胞）", value=0.0)
-Plt = st.sidebar.number_input("Plt（血小板）", value=0.0)
+AST = st.sidebar.number_input("AST", 0.0)
+ALT = st.sidebar.number_input("ALT", 0.0)
+UA = st.sidebar.number_input("尿酸 UA", 0.0)
+Cr = st.sidebar.number_input("肌酐 Cr", 1.0)
 
-# —— 生化 ——
-AST = st.sidebar.number_input("AST", value=0.0)
-ALT = st.sidebar.number_input("ALT", value=0.0)
-UA  = st.sidebar.number_input("UA", value=0.0)
-Cr  = st.sidebar.number_input("Cr", value=0.0)
+age = st.sidebar.number_input("妊娠年龄", 30)
 
-# —— 人口学 ——
-age = st.sidebar.number_input("年龄（Age）", value=30.0)
-gest_age = st.sidebar.number_input("妊娠年龄（周）", value=0.0)
-bmi = st.sidebar.number_input("孕前 BMI", value=0.0)
+BMI = st.sidebar.number_input("孕前 BMI", 0.0)
+IVF = st.sidebar.selectbox("试管", [0, 1])
+chronic_htn = st.sidebar.selectbox("慢性高血压", [0, 1])
+dm = st.sidebar.selectbox("糖尿病", [0, 1])
+pe_history = st.sidebar.selectbox("子痫前期既往史", [0, 1])
 
-# —— MoM ——
-mom_p   = st.sidebar.number_input("MoM值（P）", value=0.0)
-mom_pi  = st.sidebar.number_input("MoM值（PI）", value=0.0)
-mom_map = st.sidebar.number_input("MoM值（MAP）", value=0.0)
-
-# —— 其他 ——
-ivf = st.sidebar.selectbox("试管婴儿（0/1）", [0, 1])
-fetus = st.sidebar.number_input("胎数", value=1.0)
-parity = st.sidebar.number_input("产次", value=0.0)
-
-bad_history = st.sidebar.selectbox("不良孕产史（0/1）", [0, 1])
-pe_history = st.sidebar.selectbox("子痫前期既往史（0/1）", [0, 1])
-chronic_htn = st.sidebar.selectbox("慢性高血压（0/1）", [0, 1])
-internal_disease = st.sidebar.selectbox("内科疾病史（0/1）", [0, 1])
-aps = st.sidebar.selectbox("非典型抗磷脂综合征（0/1）", [0, 1])
-diabetes = st.sidebar.selectbox("糖尿病（0/1）", [0, 1])
-
-# ===============================
-# 自动计算指标
-# ===============================
-LMR = L / M if M > 0 else 0
-NMR = N / M if M > 0 else 0
-SII = (N * Plt / L) if L > 0 else 0
-PIV = (N * Plt * M / L) if L > 0 else 0
-
-APRI = ((AST / 40) / Plt * 100) if Plt > 0 else 0
-FIB4 = (age * AST / (Plt * math.sqrt(ALT))) if (Plt > 0 and ALT > 0) else 0
-HSI = (8 * ALT / AST + bmi) if AST > 0 else 0
+# ================== 自动计算指标 ==================
+LMR = L / WBC if WBC > 0 else 0
+APRI = (AST / 40) * 100 / Plt if Plt > 0 else 0
+FIB4 = (age * AST) / (Plt * np.sqrt(ALT)) if Plt > 0 and ALT > 0 else 0
+HSI = 8 * ALT / AST + BMI if AST > 0 else 0
 SUA_sCr = UA / Cr if Cr > 0 else 0
 
-with st.expander("📐 系统自动计算指标"):
-    st.write(f"LMR = {LMR:.3f}")
-    st.write(f"NMR = {NMR:.3f}")
-    st.write(f"SII = {SII:.3f}")
-    st.write(f"PIV = {PIV:.3f}")
-    st.write(f"APRI = {APRI:.3f}")
-    st.write(f"FIB-4 = {FIB4:.3f}")
-    st.write(f"HSI = {HSI:.3f}")
-    st.write(f"SUA/sCr = {SUA_sCr:.3f}")
+st.sidebar.markdown("### 📐 自动计算指标")
+st.sidebar.write(f"LMR = {LMR:.3f}")
+st.sidebar.write(f"APRI = {APRI:.3f}")
+st.sidebar.write(f"FIB-4 = {FIB4:.3f}")
+st.sidebar.write(f"HSI = {HSI:.3f}")
+st.sidebar.write(f"SUA/sCr = {SUA_sCr:.3f}")
 
-# ===============================
-# 预测
-# ===============================
-if st.sidebar.button("🚀 开始预测"):
-    X = np.array([[
-        WBC, N, M, Plt, L,
-        LMR, NMR, SII, PIV,
-        mom_p, mom_pi, mom_map,
-        ivf, bmi, fetus, parity,
-        AST, ALT, Cr, UA,
-        HSI, APRI, FIB4, SUA_sCr,
-        bad_history, pe_history, chronic_htn,
-        internal_disease, aps, diabetes, gest_age
-    ]])
+# ================== 特征向量（顺序必须与训练一致） ==================
+features = np.array([[
+    WBC, N, Plt, L,
+    LMR,
+    AST, ALT, UA, Cr,
+    APRI, FIB4, HSI, SUA_sCr,
+    BMI, IVF, chronic_htn, dm, pe_history, age
+]])
 
-    prob = model.predict_proba(X)[0, 1]
+# ================== 预测 ==================
+if st.button("🚀 开始预测"):
+    if model_choice == "随机森林（RF）":
+        prob = rf_model.predict_proba(features)[0, 1]
+        st.success(f"🌲 **随机森林预测风险：{prob*100:.1f}%**")
 
-    st.subheader("📊 预测结果")
-    st.metric("子痫前期风险概率", f"{prob*100:.2f}%")
-
-    if prob >= 0.5:
-        st.error("⚠️ 预测为高风险（仅科研参考）")
     else:
-        st.success("✅ 预测为相对低风险（仅科研参考）")
+        prob = log_model.predict_proba(features)[0, 1]
+        st.success(f"📈 **Logistic 回归预测风险：{prob*100:.1f}%**")
+
+        # OR 解释
+        coef = log_model.coef_[0]
+        OR = np.exp(coef)
+
+        st.subheader("📊 Logistic 回归 OR 解释（部分）")
+        or_df = pd.DataFrame({
+            "特征": [
+                "WBC", "N", "Plt", "L", "LMR",
+                "AST", "ALT", "UA", "Cr",
+                "APRI", "FIB4", "HSI", "SUA/sCr",
+                "BMI", "试管", "慢性高血压", "糖尿病", "既往PE", "年龄"
+            ],
+            "OR": OR
+        })
+
+        st.dataframe(or_df.round(3))
