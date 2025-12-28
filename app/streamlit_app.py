@@ -3,6 +3,7 @@ import pickle
 import numpy as np
 import os
 import pandas as pd
+import math
 
 # ================== 模型路径 ==================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,10 +15,6 @@ LOG_MODEL_PATH = os.path.join(BASE_DIR, "model", "logistic_model.pkl")
 def load_model(path):
     with open(path, "rb") as f:
         return pickle.load(f)
-
-if not os.path.exists(RF_MODEL_PATH) or not os.path.exists(LOG_MODEL_PATH):
-    st.error("❌ 模型文件未找到，请先在本地训练 RF 和 Logistic")
-    st.stop()
 
 rf_model = load_model(RF_MODEL_PATH)
 log_model = load_model(LOG_MODEL_PATH)
@@ -33,73 +30,118 @@ model_choice = st.radio(
     horizontal=True
 )
 
-# ================== 输入区 ==================
-st.sidebar.header("🔧 输入临床指标")
+# ================== 预测方式选择 ==================
+mode = st.radio(
+    "请选择预测方式：",
+    ["单条输入预测", "CSV 批量预测"],
+    horizontal=True
+)
 
-WBC = st.sidebar.number_input("WBC", 0.0)
-N = st.sidebar.number_input("中性粒细胞 N", 0.0)
-L = st.sidebar.number_input("淋巴细胞 L", 0.0)
-Plt = st.sidebar.number_input("血小板 Plt", 0.0)
-
-AST = st.sidebar.number_input("AST", 0.0)
-ALT = st.sidebar.number_input("ALT", 0.0)
-UA = st.sidebar.number_input("尿酸 UA", 0.0)
-Cr = st.sidebar.number_input("肌酐 Cr", 1.0)
-
-age = st.sidebar.number_input("妊娠年龄", 30)
-
-BMI = st.sidebar.number_input("孕前 BMI", 0.0)
-IVF = st.sidebar.selectbox("试管", [0, 1])
-chronic_htn = st.sidebar.selectbox("慢性高血压", [0, 1])
-dm = st.sidebar.selectbox("糖尿病", [0, 1])
-pe_history = st.sidebar.selectbox("子痫前期既往史", [0, 1])
-
-# ================== 自动计算指标 ==================
-LMR = L / WBC if WBC > 0 else 0
-APRI = (AST / 40) * 100 / Plt if Plt > 0 else 0
-FIB4 = (age * AST) / (Plt * np.sqrt(ALT)) if Plt > 0 and ALT > 0 else 0
-HSI = 8 * ALT / AST + BMI if AST > 0 else 0
-SUA_sCr = UA / Cr if Cr > 0 else 0
-
-st.sidebar.markdown("### 📐 自动计算指标")
-st.sidebar.write(f"LMR = {LMR:.3f}")
-st.sidebar.write(f"APRI = {APRI:.3f}")
-st.sidebar.write(f"FIB-4 = {FIB4:.3f}")
-st.sidebar.write(f"HSI = {HSI:.3f}")
-st.sidebar.write(f"SUA/sCr = {SUA_sCr:.3f}")
-
-# ================== 特征向量（顺序必须与训练一致） ==================
-features = np.array([[
-    WBC, N, Plt, L,
-    LMR,
-    AST, ALT, UA, Cr,
-    APRI, FIB4, HSI, SUA_sCr,
-    BMI, IVF, chronic_htn, dm, pe_history, age
-]])
-
-# ================== 预测 ==================
-if st.button("🚀 开始预测"):
-    if model_choice == "随机森林（RF）":
-        prob = rf_model.predict_proba(features)[0, 1]
-        st.success(f"🌲 **随机森林预测风险：{prob*100:.1f}%**")
-
+# ================== 批量预测风险等级函数 ==================
+def get_risk_level(prob):
+    if prob < 0.2:
+        return "低风险"
+    elif prob < 0.5:
+        return "中风险"
     else:
-        prob = log_model.predict_proba(features)[0, 1]
-        st.success(f"📈 **Logistic 回归预测风险：{prob*100:.1f}%**")
+        return "高风险"
 
-        # OR 解释
-        coef = log_model.coef_[0]
-        OR = np.exp(coef)
+# ================== 单条输入预测 ==================
+if mode == "单条输入预测":
+    st.sidebar.header("🔧 输入临床指标")
+    WBC = st.sidebar.number_input("WBC", 0.0)
+    N = st.sidebar.number_input("中性粒细胞 N", 0.0)
+    L = st.sidebar.number_input("淋巴细胞 L", 0.0)
+    M = st.sidebar.number_input("单核细胞 M", 0.0)
+    Plt = st.sidebar.number_input("血小板 Plt", 0.0)
+    AST = st.sidebar.number_input("AST", 0.0)
+    ALT = st.sidebar.number_input("ALT", 0.0)
+    UA = st.sidebar.number_input("尿酸 UA", 0.0)
+    Cr = st.sidebar.number_input("肌酐 Cr", 1.0)
+    age = st.sidebar.number_input("妊娠年龄", 30)
+    BMI = st.sidebar.number_input("孕前 BMI", 0.0)
+    IVF = st.sidebar.selectbox("试管", [0, 1])
+    chronic_htn = st.sidebar.selectbox("慢性高血压", [0, 1])
+    dm = st.sidebar.selectbox("糖尿病", [0, 1])
+    pe_history = st.sidebar.selectbox("子痫前期既往史", [0, 1])
 
-        st.subheader("📊 Logistic 回归 OR 解释（部分）")
-        or_df = pd.DataFrame({
-            "特征": [
-                "WBC", "N", "Plt", "L", "LMR",
-                "AST", "ALT", "UA", "Cr",
-                "APRI", "FIB4", "HSI", "SUA/sCr",
-                "BMI", "试管", "慢性高血压", "糖尿病", "既往PE", "年龄"
-            ],
-            "OR": OR
-        })
+    # 自动计算指标
+    LMR = L / M if M > 0 else 0
+    NMR = N / M if M > 0 else 0
+    SII = (N * Plt / L) if L > 0 else 0
+    PIV = (N * Plt * M / L) if L > 0 else 0
+    APRI = ((AST / 40) / Plt * 100) if Plt > 0 else 0
+    FIB4 = (age * AST / (Plt * math.sqrt(ALT))) if (Plt > 0 and ALT > 0) else 0
+    HSI = (8 * ALT / AST + BMI) if AST > 0 else 0
+    SUA_sCr = UA / Cr if Cr > 0 else 0
 
-        st.dataframe(or_df.round(3))
+    features = np.array([[
+        WBC, N, Plt, L, M,
+        LMR, NMR, SII, PIV,
+        AST, ALT, UA, Cr,
+        APRI, FIB4, HSI, SUA_sCr,
+        BMI, IVF, chronic_htn, dm, pe_history, age
+    ]])
+
+    with st.expander("📐 系统自动计算指标"):
+        st.write(f"LMR = {LMR:.3f}")
+        st.write(f"NMR = {NMR:.3f}")
+        st.write(f"SII = {SII:.3f}")
+        st.write(f"PIV = {PIV:.3f}")
+        st.write(f"APRI = {APRI:.3f}")
+        st.write(f"FIB-4 = {FIB4:.3f}")
+        st.write(f"HSI = {HSI:.3f}")
+        st.write(f"SUA/sCr = {SUA_sCr:.3f}")
+
+    if st.button("🚀 开始预测"):
+        features_safe = np.array(features).reshape(1, -1)
+        try:
+            if model_choice == "随机森林（RF）":
+                prob = rf_model.predict_proba(features_safe)[0, 1]
+            else:
+                prob = log_model.predict_proba(features_safe)[0, 1]
+            st.success(f"预测风险概率：{prob*100:.1f}% ({get_risk_level(prob)})")
+        except ValueError as e:
+            st.error(f"❌ 预测失败: {e}")
+
+# ================== CSV 批量预测 ==================
+else:
+    uploaded_file = st.file_uploader("上传 CSV 文件", type=["csv"])
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+
+        # 自动计算指标
+        df["LMR"] = df["L"] / df["M"].replace(0, np.nan)
+        df["NMR"] = df["N"] / df["M"].replace(0, np.nan)
+        df["SII"] = (df["N"] * df["Plt"] / df["L"]).replace(np.inf, 0).fillna(0)
+        df["PIV"] = (df["N"] * df["Plt"] * df["M"] / df["L"]).replace(np.inf, 0).fillna(0)
+        df["APRI"] = ((df["AST"] / 40) / df["Plt"] * 100).replace(np.inf, 0).fillna(0)
+        df["FIB4"] = (df["妊娠年龄"] * df["AST"] / (df["Plt"] * np.sqrt(df["ALT"]))).replace(np.inf, 0).fillna(0)
+        df["HSI"] = (8 * df["ALT"] / df["AST"] + df["孕前 BMI"]).replace(np.inf, 0).fillna(0)
+        df["SUA_sCr"] = (df["UA"] / df["Cr"]).replace(np.inf, 0).fillna(0)
+
+        # 特征顺序（必须和模型一致）
+        feature_cols = [
+            "WBC","N","Plt","L","M",
+            "LMR","NMR","SII","PIV",
+            "AST","ALT","UA","Cr",
+            "APRI","FIB4","HSI","SUA_sCr",
+            "孕前 BMI","试管","慢性高血压","糖尿病","子痫前期既往史","妊娠年龄"
+        ]
+
+        X = df[feature_cols].values
+
+        try:
+            if model_choice == "随机森林（RF）":
+                probs = rf_model.predict_proba(X)[:, 1]
+            else:
+                probs = log_model.predict_proba(X)[:, 1]
+
+            df["预测风险概率"] = probs
+            df["风险等级"] = [get_risk_level(p) for p in probs]
+
+            st.success("✅ 批量预测完成！")
+            st.dataframe(df)
+            st.download_button("📥 下载结果 CSV", df.to_csv(index=False).encode('utf-8'), "预测结果.csv")
+        except ValueError as e:
+            st.error(f"❌ 预测失败: {e}")
